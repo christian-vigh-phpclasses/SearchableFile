@@ -39,7 +39,7 @@ or cycle through file contents using an iterator :
 
 However, please note that such constructs should be used with care, since PHP will be terribly slow at doing that.
 
-You can also use the equivalent of the *preg_match()* and *preg_match_all()* builtin PHP functions ; the following example tries to find the first occurrence of the *"\pict"* or *"\bin"* strings :
+You can also use the equivalent of the *preg\_match()* and *preg\_match\_all()* builtin PHP functions ; the following example tries to find the first occurrence of the *"\pict"* or *"\bin"* strings :
 
 	$status 	=  $sf -> pcre_match ( '/\\((bin)|(pict))/', $match, PREG_OFFSET_CAPTURE ) ;
 
@@ -51,7 +51,7 @@ Please have a look at the *Making the pcre functions work* section later in this
 
 ## Making the examples work ##
 
-All the examples provided with this package use a file named *"verybigfile.rtf"* and assume that this is an RTF file which contains embedded pictures. They should be used as command-line scripts.
+All the examples provided with this package use a file named *"verybigfile.rtf"* and assume that this is an RTF file which contains embedded pictures and drawing objects. They should be used as command-line scripts.
 
 I won't pollute this repository by providing a useless data file of almost 1Gb, but you can recreate it very easily :
 
@@ -81,13 +81,14 @@ For this reason, you should ensure that :
 The PCRE functions provided by the **SearchableFile** class are : *pcre\_match()* and *pcre\_match\_all()* ; there is no magic in them, they simply rely on an external command, **pcregrep**, which is not included in standard Linux distributions.
 
 To install it :
+
 - On Debian distributions, run the following command :
 
-	apt_get install pcregrep
+		apt_get install pcregrep
 
 - On CentOs distributions, it seems to be :
 
-	yum install pcre	 	# not tested !
+		yum install pcre	 	# not tested !
 
 - On Windows systems, you will need the Cygwin package ([http://www.cygwin.org/](http://www.cygwin.org/ "http://www.cygwin.org/")). This is to my opinion the longest installation program in the world, but it's worth the waiting.
 

@@ -395,6 +395,7 @@ class  SearchableFile			implements 	\ArrayAccess, \Countable, \Iterator
 	    }
 
 
+
 	/*--------------------------------------------------------------------------------------------------------------
 
 	    NAME
@@ -761,10 +762,7 @@ class  SearchableFile			implements 	\ArrayAccess, \Countable, \Iterator
 		   	else if  ( $offset  >  $start_offset )
 		   	   	$max 	=  $index + 1 ;
 		   	else
-		   	   {
-		   	   	$index 	=  $index ;
 		   		break ;
-		   	    }
 
 		   	$old_index 	=  $index ;
 		   	$index 	=  $min + ( integer ) ( ( $max - $min ) / 2 ) ;

@@ -212,8 +212,20 @@ Extracts a substring from the searchable file. The *$start* and *$length* parame
 Returns the specified substring or false if one of the following conditions occur :
 
 - The file is less than *$start* bytes
-- *$length* is negative, and goes past $start backwards
+- *$length* is negative, and goes past *$start* backwards
 
 An empty string is returned if *$length* has been specified and is zero (ie, 0, false or null).
 
+## Properties ##
 
+### Filename ###
+
+Gets the underlying filename.
+
+### ReadBufferSize ###
+
+Gets the read buffer size.
+
+### FileSize ###
+
+Gets the underlying file size.

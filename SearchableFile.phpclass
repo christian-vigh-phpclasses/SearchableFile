@@ -910,6 +910,10 @@ class  SearchableFile			implements 	\ArrayAccess, \Countable, \Iterator
 		// First character is the opening delimiter
 		$start 		=  $re [0] ;
 
+		// A regex delimiter must not be alphanumeric
+		if  ( ! ctype_alnum ( $start ) )
+			throw ( new \RuntimeException ( "The delimiter cannot be alphanumeric in regular expression \"$re\" ." ) ) ;
+
 		// And we must match the ending delimiter ; <>, [], {} and () are authorized as beginning and ending delimiters !
 		switch  ( $start )
 		   {

@@ -11,8 +11,11 @@
         Christian Vigh, 03/2016.
 
     HISTORY
-    [Version : 1.0]    [Date : 2016/03/29]     [Author : CV]
+    [Version : 1.0]	[Date : 2016/03/29]     [Author : CV]
         Initial version.
+
+    [Version : 1.1]	[Date : 2016/04/24]     [Author : CV]
+    . Implemented some kind of naive buffer cache to avoid unnecessary disk IO.
 
  **************************************************************************************************************/
 
@@ -24,39 +27,56 @@
   ==============================================================================================================*/
 class  SearchableFile            implements    \ArrayAccess, \Countable, \Iterator
 {
-    public $Filename;            // Text file to be searched
-    public $ReadBufferSize;        // Read buffer size
-    public $FileSize;            // Current file size
-
-    protected $Buffer = null;    // Current read buffer
-    protected $BufferOffset = 0;        // Offset of current read buffer
-    protected $BufferSize = 0;        // Size of current read buffer (may be less than $ReadBufferSize for the last record)
-    protected $fd = null;    // Opened file resource
+    // Name of the file whose contents are to be searched
+    public $Filename;
+    // File size
+    public $Filesize;
+    // Buffer cache and cache size
+    public $Cache;
+    private $CacheSize;
+    // Input record size
+    public $RecordSize;
+    // File descriptor
+    public $fp;
+    // Number of cache misses
+    public $CacheMisses = [];
 
     /*--------------------------------------------------------------------------------------------------------------
 
         CONSTRUCTOR
-            Instantiate a SearchableFile object and opens the specified file for reading.
+            Instantiates a SearchableFile object.
 
         PROTOTYPE
-            $sf 	=  new SearchableFile ( $filename, $record_size = 16384 ) ;
+            $sf 	=  new SearchableFile ( $record_size = 16384, $cache_size = 8 ) ;
 
         PARAMETERS
-        $filename (string) -
-            File to be opened.
-
         $record_size (integer) -
             Size of a read buffer, in bytes.
 
-     *-------------------------------------------------------------------------------------------------------------*/
-     public function __construct($filename, $record_size = 16384, $open = true)
-     {
-         $this->ReadBufferSize = $record_size;
+        $cache_size (integer) -
+            Buffer cache size. A cache of $cache_size items, each having a record size of $record_size, will
+            be allocated into memory.
 
-         if ($open) {
-             $this->Open($filename);
-         }
+        NOTES 
+        Both record size and cache size can be changed after instatiation but they will only be applied during
+        the next call to Open().
+
+     *-------------------------------------------------------------------------------------------------------------*/
+     public function __construct($record_size = 16384, $cache_size = 8)
+     {
+         $this->RecordSize = $record_size;
+         $this->CacheSize = $cache_size;
+
+         $this->__initialize();
      }
+
+    private function __initialize()
+    {
+        $this->Filename = false;
+        $this->Filesize = false;
+        $this->Cache = false;
+        $this->fp = false;
+    }
 
     /*--------------------------------------------------------------------------------------------------------------
 
@@ -99,18 +119,17 @@ class  SearchableFile            implements    \ArrayAccess, \Countable, \Iterat
      *-------------------------------------------------------------------------------------------------------------*/
     public function Open($filename)
     {
-        if ($this->fd) {
-            throw (new \RuntimeException("File \"$filename\" is already opened."));
-        }
+        $this->Close();
 
-        $this->Filename = $filename;
-
-        if (!($this->fd = fopen($filename, 'r'))) {
+        if (!($this->fp = @fopen($filename, 'r'))) {
             throw (new \RuntimeException("Cannot open file \"$filename\"."));
         }
 
-        $info = fstat($this->fd);
-        $this->FileSize = $info [ 'size' ];
+        $info = fstat($this->fp);
+
+        $this->Filename = $filename;
+        $this->Filesize = $info [ 'size' ];
+        $this->Cache = new SearchableFileCache($this, $this->CacheSize);
     }
 
     /*--------------------------------------------------------------------------------------------------------------
@@ -130,123 +149,101 @@ class  SearchableFile            implements    \ArrayAccess, \Countable, \Iterat
      *-------------------------------------------------------------------------------------------------------------*/
     public function Close()
     {
-        if ($this->fd) {
-            fclose($this->fd);
-
-            $this->Buffer = null;
-            $this->BufferSize = 0;
-            $this->BufferOffset = 0;
-            $this->fd = null;
+        if ($this->fp) {
+            fclose($this->fp);
+            $this->__initialize();
         }
     }
 
     /*--------------------------------------------------------------------------------------------------------------
 
         NAME
-        ReadAt - Reads a data block containing the specified offset.
+        Write - write file data between two offsets.
 
         PROTOTYPE
-            $status 	=  $this -> ReadAt ( $offset ) ;
+            $sf -> Write ( $output, $start, $end = false ) ;
 
         DESCRIPTION
-            Reads the data block containing the specified byte offset.
+            Writes all file data comprised between offsets $start and $end.
 
         PARAMETERS
-        $offset (integer) -
-            Offset to be searched for.
+            $output -
+                Either a file or stream resource, or a callback which has the following prototype, the $data
+                parameter containing the next block of data :
 
-        RETURN VALUE
-        Returns true in case of success, false when end of file has been reached.
+                    function callback ( $data ) ;
 
-     *-------------------------------------------------------------------------------------------------------------*/
-    protected function ReadAt($offset)
-    {
-        // EOF reached
-        if ($offset  >=  $this->FileSize) {
-            return  false;
-        }
+            $start (integer) -
+                Start offset.
 
-        // A new buffer needs to be read in two cases :
-        // - At the first invocation, when the read buffer is empty
-        // - When $offset is outside the start/end offsets of the current read buffer
-        if (!$this->Buffer  ||  $offset  <  $this->BufferOffset  ||
-            $this->BufferOffset + $this->ReadBufferSize  <=  $offset) {
-            $record = (integer) ($offset / $this->ReadBufferSize);
-            $new_offset = $record * $this->ReadBufferSize;
-
-            fseek($this->fd, $new_offset, SEEK_SET);
-
-            $this->Buffer = fread($this->fd, $this->ReadBufferSize);
-            $this->BufferSize = strlen($this->Buffer);
-            $this->BufferOffset = $new_offset;
-        }
-
-        return  true;
-    }
-
-    /*--------------------------------------------------------------------------------------------------------------
-
-        NAME
-        ReadNext - Reads the next data block.
-
-        PROTOTYPE
-            $status 	=  $this -> ReadNext ( ) ;
-
-        DESCRIPTION
-            Reads the next data block after the current one.
-
-        RETURN VALUE
-        Returns true in case of success, false when end of file has been reached.
+            $end (integer) -
+                End offset. If this parameter is not specified or set to false, the whole contents of the file
+                will be written, starting at offset $start.
 
      *-------------------------------------------------------------------------------------------------------------*/
-    protected function ReadNext()
+    public function Write($output, $start, $end = false)
     {
-        $new_offset = $this->BufferOffset + $this->ReadBufferSize;
-
-        if ($new_offset  >=  $this->FileSize) {
-            return  false;
+        if (is_callable($output)) {
+            $callable = true;
+        } elseif (is_resource($output)) {
+            $callable = false;
+        } else {
+            throw (new \InvalidArgumentException("The '\$ouput' parameter of the Write() method must either be a valid file resource or a callback."));
         }
 
-        fseek($this->fd, $new_offset, SEEK_SET);
-
-        $this->Buffer = fread($this->fd, $this->ReadBufferSize);
-        $this->BufferSize = strlen($this->Buffer);
-        $this->BufferOffset = $new_offset;
-
-        return  true;
-    }
-
-    /*--------------------------------------------------------------------------------------------------------------
-
-        NAME
-        ReadPrevious - Reads the previous data block.
-
-        PROTOTYPE
-            $status 	=  $this -> ReadNext ( ) ;
-
-        DESCRIPTION
-            Reads the previous data block before the current one.
-
-        RETURN VALUE
-        Returns true in case of success, false when beginning of file has been reached.
-
-     *-------------------------------------------------------------------------------------------------------------*/
-    protected function ReadPrevious()
-    {
-        if (!$this->BufferOffset) {
-            return  false;
+        if ($end  !==  false  &&  $end  <  $start) {
+            throw (new \InvalidArgumentException("The '\$end' parameter of the Write() method must be greater than or equal to ".
+                                "the '\$start' parameter."));
         }
 
-        $new_offset = $this->BufferOffset - $this->ReadBufferSize;
+        if ($end  ===  false) {
+            $end = $this->Filesize - 1;
+        }
 
-        fseek($this->fd, $new_offset, SEEK_SET);
+        if (!($buffer = $this->Cache->Get($start))) {
+            return;
+        }
 
-        $this->Buffer = fread($this->fd, $this->ReadBufferSize);
-        $this->BufferSize = strlen($this->Buffer);
-        $this->BufferOffset = $new_offset;
+        $rel_offset = $start % $this->RecordSize;
+        $count = $end - $start + 1;
+        $length = min($count, $this->RecordSize - $rel_offset);
+        $data = substr($buffer, $rel_offset, $length);
+        $count           -=  strlen($data);
 
-        return  true;
+        if ($callable) {
+            $output ($data);
+        } else {
+            fwrite($output, $data);
+        }
+
+        while ($count  >  0) {
+            if (!($buffer = $this->Cache->Next())) {
+                return;
+            }
+
+            $data = substr($buffer->Data, 0, $count);
+
+            if ($callable) {
+                $output ($data);
+            } else {
+                fwrite($output, $data);
+            }
+
+            $count  -=  strlen($data);
+        }
     }
+
+    /**************************************************************************************************************
+     **************************************************************************************************************
+     **************************************************************************************************************
+     ******                                                                                                  ******
+     ******                                                                                                  ******
+     ******                                         SEARCH FUNCTIONS                                         ******
+     ******                                                                                                  ******
+     ******                                                                                                  ******
+     **************************************************************************************************************
+     **************************************************************************************************************
+     **************************************************************************************************************/
 
     /*--------------------------------------------------------------------------------------------------------------
 
@@ -287,34 +284,34 @@ class  SearchableFile            implements    \ArrayAccess, \Countable, \Iterat
         $searched_length = strlen($searched_string);
 
         // Read the data block that contains the specified offset
-        $status = $this->ReadAt($offset);
+        $buffer = $this->Cache->Get($offset);
 
-        if (!$status) {
+        if (!$buffer) {
             return  false;
         }
 
         // Compute the relative offset within this data block
-        $relative_offset = $offset - $this->BufferOffset;
+        $relative_offset = $offset - $buffer->Offset;
 
         // Search the string ; if found, we're done
-        $pos = $func ($this->Buffer, $searched_string, $relative_offset);
+        $pos = $func ($buffer->Data, $searched_string, $relative_offset);
 
         if ($pos  !==  false) {
-            return  $this->BufferOffset + $pos;
+            return  $buffer->Offset + $pos;
         }
 
         // Otherwise, continue reading blocks until we find something or EOF
-        while ($status) {
+        while ($buffer) {
             // Don't forget that the searched string could span two data blocks, so we will do a search on the
             // last $searched_length-1 characters of the current buffer plus the next data block
-            $tail = substr($this->Buffer, $this->BufferSize - $searched_length + 1);
-            $old_size = $this->BufferSize;
-            $old_offset = $this->BufferOffset;
-            $status = $this->ReadNext();
+            $tail = substr($buffer, $buffer->Size - $searched_length + 1);
+            $old_size = $buffer->Size;
+            $old_offset = $buffer->Offset;
+            $buffer = $this->Cache->Next();
 
             // There is a next block
-            if ($status) {
-                $data = $tail.$this->Buffer;            // Catenate the tail of the previous block with the current one
+            if ($buffer) {
+                $data = $tail.$buffer->Data;            // Catenate the tail of the previous block with the current one
                 $pos = $func ($data, $searched_string, 0);    // Do a search on this
 
                 // Of cours, since we did a search on a whole block plus some characters from the previous one, we will
@@ -350,9 +347,9 @@ class  SearchableFile            implements    \ArrayAccess, \Countable, \Iterat
         RETURN VALUE
         Returns either the byte offset of the first character found belonging to $cset, or false if no more
         characters from $cset are present in the file.
-        
+
         NOTES
-        Unlike the useless PHP strchr() function, which returns a substring starting with the searched 
+        Unlike the useless PHP strchr() function, which returns a substring starting with the searched
         character or string, but much more like the C strchr() function, which returns a pointer to the found
         character, strchr() returns the offset in the file of the searched character(s).
 
@@ -360,33 +357,33 @@ class  SearchableFile            implements    \ArrayAccess, \Countable, \Iterat
     public function strchr($cset, $offset = 0)
     {
         // Read the data block that contains the specified offset
-        $status = $this->ReadAt($offset);
+        $buffer = $this->Cache->Get($offset);
 
-        if (!$status) {
+        if (!$buffer) {
             return  false;
         }
 
         // Compute the relative offset within this data block
-        $relative_offset = $offset - $this->BufferOffset;
+        $relative_offset = $offset - $buffer->Offset;
 
         // Search for the first character in the specified cset
-        $length = strcspn($this->Buffer, $cset, $relative_offset);
+        $length = strcspn($buffer->Data, $cset, $relative_offset);
 
-        if ($length + $relative_offset  <  $this->BufferSize  &&
-                strpos($cset, $this->Buffer [ $relative_offset + $length ])  !==  false) {
-            return  $this->BufferOffset + $relative_offset + $length;
+        if ($length + $relative_offset  <  $buffer->Size  &&
+                strpos($cset, $buffer->Data [ $relative_offset + $length ])  !==  false) {
+            return  $buffer->Offset + $relative_offset + $length;
         }
 
         // Otherwise, continue reading blocks until we find something or EOF
-        while ($status) {
-            $status = $this->ReadNext();
+        while ($buffer) {
+            $buffer = $this->Cache->Next();
 
-            if ($status) {
-                $length = strcspn($this->Buffer, $cset, 0);
+            if ($buffer) {
+                $length = strcspn($buffer->Data, $cset, 0);
 
-                if ($length  <  $this->BufferSize  &&
-                        strpos($cset, $this->Buffer [ $length ]) !==  false) {
-                    return  $this->BufferOffset + $length;
+                if ($length  <  $buffer->Size  &&
+                        strpos($cset, $buffer->Data [ $length ]) !==  false) {
+                    return  $buffer->Offset + $length;
                 }
             }
         }
@@ -561,7 +558,7 @@ class  SearchableFile            implements    \ArrayAccess, \Countable, \Iterat
         $argv = func_get_args();
         $argc = count($argv);
         $start = 0;
-        $length = $this->FileSize;
+        $length = $this->Filesize;
 
         // Compute the real start offset and the real length, according to the specifications above
         switch ($argc) {
@@ -584,12 +581,12 @@ class  SearchableFile            implements    \ArrayAccess, \Countable, \Iterat
             case    1 :
                 $start = $argv [0];
 
-                if ($start  >=  $this->FileSize) {
+                if ($start  >=  $this->Filesize) {
                     return  false;
                 }
 
                 if ($start  <  0) {
-                    $start = $this->FileSize + $start;
+                    $start = $this->Filesize + $start;
                 }
 
                 break;
@@ -603,22 +600,22 @@ class  SearchableFile            implements    \ArrayAccess, \Countable, \Iterat
         }
 
         // Read the first block that contains the start character
-        $status = $this->ReadAt($start);
+        $buffer = $this->Cache->Get($start);
 
-        if (!$status) {
+        if (!$buffer) {
             return  false;
         }
 
-        $relpos = $start - $this->BufferOffset;    // Compute relative position in current buffer
+        $relpos = $start - $buffer->Offset;        // Compute relative position in current buffer
         $substring = '';                    // Value to be returned
 
         // Loop until $length characters have been extracted
         while ($length  >  0) {
             // Compute the number of bytes we can extract from the current buffer
-            $remaining = min($this->BufferSize - $relpos, $length);
+            $remaining = min($buffer->Size - $relpos, $length);
 
             // Get the substring
-            $substring    .=  substr($this->Buffer, $relpos, $remaining);
+            $substring    .=  substr($buffer->Data, $relpos, $remaining);
 
             // Subtract the number of characters extracted from the remaining number of
             // characters to process
@@ -627,9 +624,9 @@ class  SearchableFile            implements    \ArrayAccess, \Countable, \Iterat
 
             // If we have still more characters to be extracted, read the next block
             if ($length) {
-                $status = $this->ReadNext();
+                $buffer = $this->Cache->Next();
 
-                if (!$status) {
+                if (!$buffer) {
                     return  false;
                 }
             }
@@ -640,31 +637,31 @@ class  SearchableFile            implements    \ArrayAccess, \Countable, \Iterat
     }
 
     /*--------------------------------------------------------------------------------------------------------------
-     
+
         NAME
             pcre_match - Searches for a pattern.
-     
+
         PROTOTYPE
             $status 	=  pcre_match ( $pattern, &$matches = null, $flags = 0, $start_offset = 0 ) ;
-     
+
         DESCRIPTION
             pcre_match() tries to behave like preg_match(), but operates on a file rather than in memory.
         For achieving that, it uses the pcregrep linux command to extract match offset using the --file-offsets
         parameter.
-     
+
         PARAMETERS
         $pattern (string) -
             Pcre pattern to be matched.
-            
+
         $matches (array) -
             Array that will receive the match values.
-            
+
         $flags (integer) -
             Any PREG_* flags recognized by the PHP preg_match() builtin function.
-            
+
         $start_offset (integer) -
             Offset in the file where the search is to be started.
-        
+
         RETURN VALUE
         Returns false if some error occurred (the starting offset is beyond the end of the file, or the search
         pattern is incorrect) ; otherwise the number of matches is returned (0 or 1).
@@ -673,45 +670,45 @@ class  SearchableFile            implements    \ArrayAccess, \Countable, \Iterat
         The performances have been tested on a quad-core system running at 1.8GHz, with 8Gb of memory and a
         sample data file of 380Mb, enough to be considered as a "big file", but not too big to allow the
         file_get_contents() function to load it into memory.
-        
+
         The file contains Rtf data, and the string '\pict' has been searched all over it. The test has been
         performed on a Windows platform.
-        
+
         A single string search gives the following :
         - Using the SearchableFile class : 2.08s
         - Using file_get_contents() + preg_match() : 0.448s
         The overhead between both methods is due to the execution of the pcregrep command, which takes around
         1.5s.
-        
+
         Finding all the occurrences of the same pattern gives the following :
         - Using the SearchableFile class : 2.155s
         - Using file_get_contents() + preg_match() : 0.886s
-        
+
         Running the same test with a 780Mb (which still fits in memory on my system) file gives the following :
         - Using the SearchableFile class : 4.36s
         - Using file_get_contents() + preg_match() : 1.83s
-        
+
         As a conclusion, pcre_match() will always take longer than preg_match() ; however, it allows to handle
         files whose size does not fit into memory.
         However, performance delta between both methods should significantly decrease on Linux systems, since
         file IO is faster.
-        
+
         NOTES
         . pcre_match() first uses the pcregrep command to find the strings matching the specified pattern ; then
           it uses the SearchableFile::substr() method to extract that data ; and finally it applies the
           preg_match() function to generate an appropriate $matches array. For these reasons, anchor characters
-          ("^" and "$") should be avoided : if you have to cope with huge files, you have to make some 
+          ("^" and "$") should be avoided : if you have to cope with huge files, you have to make some
           concessions.
-        . pcregrep command results are cached ; so a next call to the pcre_match() function with the same 
+        . pcregrep command results are cached ; so a next call to the pcre_match() function with the same
           pattern will extract the results from the cache, instead of running the pcregrep command again.
-        
+
      *-------------------------------------------------------------------------------------------------------------*/
     public function pcre_match($pattern, &$matches = null, $flags = 0, $start_offset = 0)
     {
         static    $match_data = [];
 
         // Handle extreme cases immediately
-        if ($start_offset  >=  $this->FileSize) {
+        if ($start_offset  >=  $this->Filesize) {
             return  false;
         }
 
@@ -798,48 +795,48 @@ class  SearchableFile            implements    \ArrayAccess, \Countable, \Iterat
     }
 
     /*--------------------------------------------------------------------------------------------------------------
-     
+
         NAME
             pcre_match_all - Searches for all occurrences of a pattern.
-     
+
         PROTOTYPE
             $status 	=  pcre_match_all ( $pattern, &$matches = null, $flags = 0, $start_offset = 0 ) ;
-     
+
         DESCRIPTION
             pcre_match_all() tries to behave like preg_match_all(), but operates on a file rather than in memory.
         For achieving that, it uses the pcregrep linux command to extract match offset using the --file-offsets
         parameter.
-     
+
         PARAMETERS
         $pattern (string) -
             Pcre pattern to be matched.
-            
+
         $matches (array) -
             Array that will receive the match values.
-            
+
         $flags (integer) -
             Any PREG_* flags recognized by the PHP preg_match() builtin function.
-            
+
         $start_offset (integer) -
             Offset in the file where the search is to be started.
-        
+
         RETURN VALUE
         Returns false if some error occurred (the starting offset is beyond the end of the file, or the search
-        pattern is incorrect, or an individual preg_match() on one of the sub-results failed for some reason) ; 
+        pattern is incorrect, or an individual preg_match() on one of the sub-results failed for some reason) ;
         otherwise the number of matches is returned.
 
         PERFORMANCES
         The performances have been tested with the same conditions as for the pcre_match() method ; operating
         on a 780Mb file gave the following results :
-        
+
         - Using the SearchableFile class : 4.2s
         - Using file_get_contents() + preg_match() : 0.811s
-        
+
      *-------------------------------------------------------------------------------------------------------------*/
     public function pcre_match_all($pattern, &$matches = null, $flags = 0, $start_offset = 0)
     {
         // Handle extreme cases immediately
-        if ($start_offset  >=  $this->FileSize) {
+        if ($start_offset  >=  $this->Filesize) {
             return  false;
         }
 
@@ -856,7 +853,7 @@ class  SearchableFile            implements    \ArrayAccess, \Countable, \Iterat
                     implode("\n", $output)));
         }
 
-        // Collect the results 
+        // Collect the results
         $matches = [];
 
         foreach ($output  as  $line) {
@@ -890,6 +887,7 @@ class  SearchableFile            implements    \ArrayAccess, \Countable, \Iterat
      **************************************************************************************************************
      **************************************************************************************************************
      **************************************************************************************************************/
+
     // transform_regex -
     //	Transforms a regular expression into a form suitable to the pcregrep command, including command-line
     //	options determined by the regex modifiers.
@@ -906,11 +904,6 @@ class  SearchableFile            implements    \ArrayAccess, \Countable, \Iterat
 
         // First character is the opening delimiter
         $start = $re [0];
-
-        // A regex delimiter must not be alphanumeric
-        if (!ctype_alnum($start)) {
-            throw (new \RuntimeException("The delimiter cannot be alphanumeric in regular expression \"$re\" ."));
-        }
 
         // And we must match the ending delimiter ; <>, [], {} and () are authorized as beginning and ending delimiters !
         switch ($start) {
@@ -1053,23 +1046,21 @@ class  SearchableFile            implements    \ArrayAccess, \Countable, \Iterat
     // Countable interface
     public function Count()
     {
-        return  $this->FileSize;
+        return  $this->Filesize;
     }
 
     // ArrayAccess interface - note that it is illegal to set/unset a byte, since the file is opened in read-only mode
     public function offsetExists($offset)
     {
-        return  $offset  >=  0  &&  $offset  <  $this->FileSize;
+        return  $offset  >=  0  &&  $offset  <  $this->Filesize;
     }
 
     public function offsetGet($offset)
     {
-        if ($offset  >=  0  &&  $offset  <  $this->FileSize) {
-            if (!$this->Buffer  ||  $offset  <  $this->BufferOffset  ||  $offset  >=  $this->BufferOffset + $this->ReadBufferSize) {
-                $this->ReadAt($offset);
-            }
+        if ($offset  >=  0  &&  $offset  <  $this->Filesize) {
+            $buffer = $this->Cache->Get($offset);
 
-            return  $this->Buffer [ $offset - $this->BufferOffset ];
+            return  $buffer->Data [ $offset - $buffer->Offset ];
         } else {
             throw (new \RuntimeException("Undefined offset $offset."));
         }
@@ -1105,7 +1096,7 @@ class  SearchableFile            implements    \ArrayAccess, \Countable, \Iterat
 
     public function valid()
     {
-        return  $this->iterator_index  >=  0  &&  $this->iterator_index  <  $this->FileSize;
+        return  $this->iterator_index  >=  0  &&  $this->iterator_index  <  $this->Filesize;
     }
 
     public function current()
@@ -1113,3 +1104,238 @@ class  SearchableFile            implements    \ArrayAccess, \Countable, \Iterat
         return  $this->offsetGet($this->iterator_index);
     }
 }
+
+/*==============================================================================================================
+
+    SearchableFileCache class -
+        Implements a buffer cache.
+
+  ==============================================================================================================*/
+ class  SearchableFileCache    // extends object
+ {
+     // Pool of buffer data
+    public $BufferPool = [];
+    // Cache size (number of buffers in the pool)
+    private $CacheSize;
+    // Current buffer (last accessed)
+    private $LastBuffer = false;
+    // Parent SearchableFile object
+    private $Parent;
+
+    /*--------------------------------------------------------------------------------------------------------------
+    
+        CONSTRUCTOR
+            Builds a buffer pool for a searchable file.
+    
+     *-------------------------------------------------------------------------------------------------------------*/
+    public function __construct($parent, $cache_size)
+    {
+        $this->Parent = $parent;
+        $this->CacheSize = $cache_size;
+    }
+
+    /*--------------------------------------------------------------------------------------------------------------
+    
+        NAME
+            Get - Retrieves record data based on its offset.
+    
+        PROTOTYPE
+            $buffer		=  $cache -> Get ( $offset ) ;
+    
+        DESCRIPTION
+            Retrieves record data based on its offset.
+    
+        PARAMETERS
+            $offset (integer) -
+                    Record containing the offset to be loaded into memory.
+    
+        RETURN VALUE
+            A SearchableFileBuffer object, or false if $offset is out of bounds.
+    
+     *-------------------------------------------------------------------------------------------------------------*/
+    public function Get($offset)
+    {
+        // Ignore offset outside the current file size
+        if ($offset  <  0  ||  $offset  >=  $this->Parent->Filesize) {
+            return  false;
+        }
+
+        // The last read buffer contains the requested offset : return it
+        if ($this->LastBuffer  &&  $this->LastBuffer->Contains($offset)) {
+            return  $this->LastBuffer;
+        }
+
+        // Compute absolute record start offset
+        $record_offset = $offset - ($offset % $this->Parent->RecordSize);
+
+        $pool_size = count($this->BufferPool);
+
+        // Last read record already contains whaat we need...
+        if (isset($this->BufferPool [ $record_offset ])) {
+            $this->LastBuffer = $this->BufferPool [ $record_offset ];
+        }
+        // Requested offset is not in the last read record so we may have to add another one in the pool, if not full
+        elseif ($pool_size  <  $this->CacheSize) {
+            $this->BufferPool [ $record_offset ] =
+            $this->LastBuffer = new SearchableFileBuffer($this->Parent, $offset);
+        }
+        // Buffer pool is full : replace the oldest record with the one we need
+        else {
+            $oldest_time = INF;
+            $oldest_entry = PHP_INT_MAX;
+
+            foreach ($this->BufferPool  as  $pool_offset => $buffer) {
+                if ($buffer->Timestamp  <  $oldest_time) {
+                    $oldest_time = $buffer->Timestamp;
+                    $oldest_entry = $pool_offset;
+                }
+            }
+
+            unset($this->BufferPool [ $oldest_entry ]);
+
+            $this->BufferPool [ $record_offset ] =
+            $this->LastBuffer = new SearchableFileBuffer($this->Parent, $offset);
+        }
+
+        return  $this->LastBuffer;
+    }
+
+    /*--------------------------------------------------------------------------------------------------------------
+    
+        NAME
+            Next - Retrieves next record
+    
+        PROTOTYPE
+            $buffer		=  $cache -> Next ( ) ;
+    
+        DESCRIPTION
+            Retrieves the next record from the cached file.
+        If no record has been read so far, retrieves the first record at offset 0.
+    
+        RETURN VALUE
+            Returns a SearchableFileBuffer object, or false if no more records are available.
+    
+     *-------------------------------------------------------------------------------------------------------------*/
+    public function Next()
+    {
+        if ($this->LastBuffer) {
+            $offset = $this->LastBuffer->Offset + $this->Parent->RecordSize;
+        } else {
+            $offset = 0;
+        }
+
+        return  $this->Get($offset);
+    }
+
+    /*--------------------------------------------------------------------------------------------------------------
+    
+        NAME
+            Previous - Retrieves previous record
+    
+        PROTOTYPE
+            $buffer		=  $cache -> Previous ( ) ;
+    
+        DESCRIPTION
+            Retrieves the previous record from the cached file.
+        If no record has been read so far, returns false.
+    
+        RETURN VALUE
+            Returns a SearchableFileBuffer object, or false if no more records are available.
+    
+     *-------------------------------------------------------------------------------------------------------------*/
+    public function Previous()
+    {
+        if ($this->LastBuffer) {
+            $offset = $this->LastBuffer->Offset + $this->Parent->RecordSize;
+        } else {
+            $offset = -1;
+        }
+
+        return  $this->Get($offset);
+    }
+ }
+
+/*==============================================================================================================
+
+    SearchableFileBuffer class -
+        Implements a buffer in the buffer cache.
+
+  ==============================================================================================================*/
+ class  SearchableFileBuffer    // extends object
+ {
+     // Record data
+    public $Data;
+    // Record offset in file
+    public $Offset;
+    // Record size (may differ from that of the parent, if we reached the last record)
+    public $Size;
+    // Record age
+    public $Timestamp;
+    // Parent SearchableFile object
+    public $Parent;
+
+    /*--------------------------------------------------------------------------------------------------------------
+    
+        NAME
+            Constructor - Builds a SearchableFileBuffer object.
+    
+        PROTOTYPE
+            $buffer		=  new SearchableFileBuffer ( $parent, $offset ) ;
+    
+        DESCRIPTION
+            Builds a SearchableFileBuffer object, by loading the contents of the record containing the specified 
+        offset.
+    
+        PARAMETERS
+            $parent (SearchableFile object) -
+                    Parent object for this buffer.
+
+        $offset (integer) -
+            Offset of the record to be loaded. The loaded buffer will start at a $parent -> RecordSize 
+            boundary and is guaranteed to contain the specified offset.
+    
+     *-------------------------------------------------------------------------------------------------------------*/
+    public function __construct($parent, $offset)
+    {
+        if (!$offset) {
+            $offset = 0;
+        }
+
+        $this->Parent = $parent;
+        $record = (integer) ($offset / $parent->RecordSize);
+        $new_offset = $record * $parent->RecordSize;
+
+        fseek($parent->fp, $new_offset, SEEK_SET);
+
+        $this->Data = fread($parent->fp, $parent->RecordSize);
+        $this->Size = strlen($this->Data);
+        $this->Offset = $new_offset;
+        $this->Timestamp = microtime(true);
+
+        $this->Parent->CacheMisses [] = $new_offset;
+    }
+
+    /*--------------------------------------------------------------------------------------------------------------
+    
+        NAME
+            Contains - Checks if this buffer contains the specified offset.
+    
+        PROTOTYPE
+            $status		=  $buffer -> Contains ( $offset ) ;
+    
+        DESCRIPTION
+            Checks if this buffer contains the specified offset.
+    
+        PARAMETERS
+            $offset (integer) -
+                    File offset to be checked.
+    
+        RETURN VALUE
+            True if the specified buffer contains $offset, false otherwise.
+    
+     *-------------------------------------------------------------------------------------------------------------*/
+    public function Contains($offset)
+    {
+        return  $offset  >=  $this->Offset  &&  $offset  <  $this->Offset + $this->Size;
+    }
+ }

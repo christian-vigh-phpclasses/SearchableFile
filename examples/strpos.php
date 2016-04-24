@@ -3,7 +3,8 @@
 	$file 		=  'verybigfile.rtf' ;
 	$t1 		=  microtime ( true ) ;
 
-	$sf 		=  new SearchableFile ( $file ) ;
+	$sf 		=  new SearchableFile ( ) ;
+	$sf -> Open ( $file ) ;
 	$pos 		=  0 ;
 	$search		=  '\\pict' ;
 	$length 	=  strlen ( $search ) ;

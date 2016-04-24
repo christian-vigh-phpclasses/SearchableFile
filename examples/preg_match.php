@@ -5,7 +5,8 @@
 
 	$t1		=  microtime ( true ) ;
 	
-	$sf 		=  new SearchableFile ( $file ) ;
+	$sf 		=  new SearchableFile ( ) ;
+	$sf -> Open ( $file ) ;
 	$offset 	=  0 ;
 	$status1 	= $sf -> pcre_match ( $re, $matches1, PREG_OFFSET_CAPTURE, $offset ) ;
 	$count1 	=  count ( $matches1 ) ;

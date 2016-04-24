@@ -10,13 +10,17 @@ The initial motivation for this class was to be able to handle big RTF contents,
 
 The **SearchableFile** class can be seen as some kind of wrapper around a text file opened in read-only mode. It won't allow you to perform in-place modifications, since it's aimed at reading text streams, analyzing contents and optionally performing some modifications on-the-fly, then finally writing them to some output stream.
 
-Creating a **SearchableFile** object is pretty simple ; just specify a filename when instantiating it :
+Creating a **SearchableFile** object is pretty simple :
 
-	$sf 	=  new SearchableFile ( 'verybigfile.txt' ) ;
+	$sf 	=  new SearchableFile ( ) ;
 
-You can also specify a block size for IO operations (the default is 16k) :
+You can also specify a block size for IO operations (the default is 16k), as well as a cache size, in numbers of records :
 
-	$sf 	=  new SearchableFile ( 'verybigfile.txt', 64 * 1024 ) ;
+	$sf 	=  new SearchableFile ( 64 * 1024, 128 ) ;
+
+Then you will have to open a file :
+
+	$sf -> Open ( 'myfile.txt' ) ;
 
 Once created, you can use any of the search functions that the class has to offer ; the following example will look for the first character in the set [\\{}] :
 
@@ -103,13 +107,13 @@ The following sections describe the **SearchableFile** methods and properties.
 
 ### Constructor ###
 
-	$sf 	= new SearchableFile ( $filename, $block_size = 16384, $open = true ) ;
+	$sf 	= new SearchableFile ( $block_size = 16384, $cache_size = 8 ) ;
 
 Creates a searchable file object.
 
 Since the class uses direct IO to access chunks of data, an optional block size can be specified (the default is 16k). Note that, at least on Windows systems, ideal block sizes range between 16 and 64Kb. Below or above that, performances seem to degrade.
 
-If the *$open* parameter is false, the file won't be opened. You will need to call the **Open()** method later for that.
+The *$cache_size* parameter indicates how many file records should be kept in cache for later retrieval. This is a naive LRU cache.
 
 ### Destructor ###
 
@@ -126,9 +130,9 @@ No exception is thrown if it was already opened.
 
 ### Open ###
 
-	$sf -> Open ( ) ;
+	$sf -> Open ( $filename ) ;
 
-Opens the file. Throws an exception if the file was already opened or could not be opened.
+Opens the specified file. Throws an exception if the file was already opened or could not be opened.
 
 ### multistrpos, multistripos ###
 

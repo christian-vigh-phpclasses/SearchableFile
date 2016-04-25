@@ -220,15 +220,32 @@ Returns the specified substring or false if one of the following conditions occu
 
 An empty string is returned if *$length* has been specified and is zero (ie, 0, false or null).
 
+## Write ##
+
+	$sf -> Write ( $output, $start, $end = false ) ;
+
+When processing large files, you sometimes need to write (copy) unmodified data from the input file to some output file. This is the purpose of the **Write** method, which takes the following parameters :
+
+- *output* : Either a file resource, or a callback function which has the following signature :
+
+		function  callback ( $data_to_write ) ;
+
+   This function ensures that *$data\_to\_write* will not exceed the record size specified when calling the **SearchableFile** class constructor. This size can even be smaller if the offset specified by the *$start* parameter does not fall on a record boundary, but somewhere in the record. In this case, *$data\_to\_write* will be smaller than the **SearchableFile** record size.
+
+- *start* : Starting file offset of the copy.
+- *end* : Ending file offset of the copy. If this parameter is not specified, the function will copy all data from *$start* to the end of file.
+
 ## Properties ##
 
 ### Filename ###
 
 Gets the underlying filename.
 
-### ReadBufferSize ###
+### RecordSize ###
 
-Gets the read buffer size.
+Gets/sets the read buffer size.
+
+Note that if the record size is modified, it will only take effect on the next call to the *Open()* method.
 
 ### FileSize ###
 

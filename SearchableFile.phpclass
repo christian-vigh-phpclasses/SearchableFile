@@ -20,6 +20,9 @@
     [Version : 1.1.1]	[Date : 2016/09/04]     [Author : CV]
 	. Added the get_contents() method.
 
+    [Version : 1.1.2]	[Date : 2016/09/20]     [Author : CV]
+	. The substr() method was returning an empty string when the 3rd parameter ($length) was not specified.
+
  **************************************************************************************************************/
 
 /*==============================================================================================================
@@ -217,7 +220,7 @@ class  SearchableFile			implements 	\ArrayAccess, \Countable, \Iterator
 		$rel_offset 	=  $start % $this -> RecordSize ;
 		$count		=  $end - $start + 1 ;
 		$length 	=  min ( $count, $this -> RecordSize - $rel_offset ) ;
-		$data 		=  substr ( $buffer -> Data, $rel_offset, $length ) ;
+		$data 		=  substr ( $buffer, $rel_offset, $length ) ;
 		$count 	       -=  strlen ( $data ) ;
 
 		if  ( $callable )
@@ -650,7 +653,7 @@ class  SearchableFile			implements 	\ArrayAccess, \Countable, \Iterator
 				$buffer 	=  $this -> Cache -> Next ( ) ;
 
 				if  ( ! $buffer )
-					return ( false ) ;
+					break ;
 			    }
 		    }
 
@@ -1143,10 +1146,10 @@ class  SearchableFile			implements 	\ArrayAccess, \Countable, \Iterator
 
 
 	/*--------------------------------------------------------------------------------------------------------------
-
+	
 	    CONSTRUCTOR
 	        Builds a buffer pool for a searchable file.
-
+	
 	 *-------------------------------------------------------------------------------------------------------------*/
 	public function  __construct ( $parent, $cache_size )
 	   {
@@ -1156,23 +1159,23 @@ class  SearchableFile			implements 	\ArrayAccess, \Countable, \Iterator
 
 
 	/*--------------------------------------------------------------------------------------------------------------
-
+	
 	    NAME
 	        Get - Retrieves record data based on its offset.
-
+	
 	    PROTOTYPE
 	        $buffer		=  $cache -> Get ( $offset ) ;
-
+	
 	    DESCRIPTION
 	        Retrieves record data based on its offset.
-
+	
 	    PARAMETERS
 	        $offset (integer) -
 	                Record containing the offset to be loaded into memory.
-
+	
 	    RETURN VALUE
 	        A SearchableFileBuffer object, or false if $offset is out of bounds.
-
+	
 	 *-------------------------------------------------------------------------------------------------------------*/
 	public function  Get ( $offset )
 	   {
@@ -1190,7 +1193,7 @@ class  SearchableFile			implements 	\ArrayAccess, \Countable, \Iterator
 		$pool_size	=  count ( $this -> BufferPool ) ;
 
 		// Last read record already contains whaat we need...
-		if  ( isset ( $this -> BufferPool [ $record_offset ] ) )
+		if  ( isset ( $this -> BufferPool [ $record_offset ] ) ) 
 		   {
 			$this -> LastBuffer			=  $this -> BufferPool [ $record_offset ] ;
 			$this -> Parent -> CacheHits ++ ;
@@ -1227,20 +1230,20 @@ class  SearchableFile			implements 	\ArrayAccess, \Countable, \Iterator
 
 
 	/*--------------------------------------------------------------------------------------------------------------
-
+	
 	    NAME
 	        Next - Retrieves next record
-
+	
 	    PROTOTYPE
 	        $buffer		=  $cache -> Next ( ) ;
-
+	
 	    DESCRIPTION
 	        Retrieves the next record from the cached file.
 		If no record has been read so far, retrieves the first record at offset 0.
-
+	
 	    RETURN VALUE
 	        Returns a SearchableFileBuffer object, or false if no more records are available.
-
+	
 	 *-------------------------------------------------------------------------------------------------------------*/
 	public function  Next ( )
 	   {
@@ -1254,20 +1257,20 @@ class  SearchableFile			implements 	\ArrayAccess, \Countable, \Iterator
 
 
 	/*--------------------------------------------------------------------------------------------------------------
-
+	
 	    NAME
 	        Previous - Retrieves previous record
-
+	
 	    PROTOTYPE
 	        $buffer		=  $cache -> Previous ( ) ;
-
+	
 	    DESCRIPTION
 	        Retrieves the previous record from the cached file.
 		If no record has been read so far, returns false.
-
+	
 	    RETURN VALUE
 	        Returns a SearchableFileBuffer object, or false if no more records are available.
-
+	
 	 *-------------------------------------------------------------------------------------------------------------*/
 	public function  Previous ( )
 	   {
@@ -1305,22 +1308,22 @@ class  SearchableFile			implements 	\ArrayAccess, \Countable, \Iterator
 
 	    NAME
 	        Constructor - Builds a SearchableFileBuffer object.
-
+	
 	    PROTOTYPE
 	        $buffer		=  new SearchableFileBuffer ( $parent, $offset ) ;
-
+	
 	    DESCRIPTION
-	        Builds a SearchableFileBuffer object, by loading the contents of the record containing the specified
+	        Builds a SearchableFileBuffer object, by loading the contents of the record containing the specified 
 		offset.
-
+	
 	    PARAMETERS
 	        $parent (SearchableFile object) -
 	                Parent object for this buffer.
 
 		$offset (integer) -
-			Offset of the record to be loaded. The loaded buffer will start at a $parent -> RecordSize
+			Offset of the record to be loaded. The loaded buffer will start at a $parent -> RecordSize 
 			boundary and is guaranteed to contain the specified offset.
-
+	
 	 *-------------------------------------------------------------------------------------------------------------*/
 	public function  __construct ( $parent, $offset )
 	   {
@@ -1343,23 +1346,23 @@ class  SearchableFile			implements 	\ArrayAccess, \Countable, \Iterator
 
 
 	/*--------------------------------------------------------------------------------------------------------------
-
+	
 	    NAME
 	        Contains - Checks if this buffer contains the specified offset.
-
+	
 	    PROTOTYPE
 	        $status		=  $buffer -> Contains ( $offset ) ;
-
+	
 	    DESCRIPTION
 	        Checks if this buffer contains the specified offset.
-
+	
 	    PARAMETERS
 	        $offset (integer) -
 	                File offset to be checked.
-
+	
 	    RETURN VALUE
 	        True if the specified buffer contains $offset, false otherwise.
-
+	
 	 *-------------------------------------------------------------------------------------------------------------*/
 	public function  Contains ( $offset )
 	   {

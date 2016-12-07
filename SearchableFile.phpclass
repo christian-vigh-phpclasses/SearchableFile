@@ -23,6 +23,10 @@
     [Version : 1.1.2]	[Date : 2016/09/20]     [Author : CV]
 	. The substr() method was returning an empty string when the 3rd parameter ($length) was not specified.
 
+    [Version : 1.1.3]	[Date : 2016/09/20]     [Author : CV]
+	. Fixed an inconsistency in method do_strpos() which caused warnings to be issued when searching for a
+	  string in cached data.
+
  **************************************************************************************************************/
 
 /*==============================================================================================================
@@ -325,7 +329,7 @@ class  SearchableFile			implements 	\ArrayAccess, \Countable, \Iterator
 		   {
 			// Don't forget that the searched string could span two data blocks, so we will do a search on the
 			// last $searched_length-1 characters of the current buffer plus the next data block
-			$tail 		=  substr ( $buffer, $buffer -> Size - $searched_length + 1 ) ;
+			$tail 		=  substr ( $buffer -> Data, $buffer -> Size - $searched_length + 1 ) ;
 			$old_size 	=  $buffer -> Size ;
 			$old_offset	=  $buffer -> Offset ;
 			$buffer 	=  $this -> Cache -> Next ( ) ;
@@ -1290,7 +1294,7 @@ class  SearchableFile			implements 	\ArrayAccess, \Countable, \Iterator
         Implements a buffer in the buffer cache.
 
   ==============================================================================================================*/
- class  SearchableFileBuffer	// extends object
+ class  SearchableFileBuffer	extends object
    {
 	// Record data
 	public 		$Data ;
@@ -1305,7 +1309,7 @@ class  SearchableFile			implements 	\ArrayAccess, \Countable, \Iterator
 
 
 	/*--------------------------------------------------------------------------------------------------------------
-
+	
 	    NAME
 	        Constructor - Builds a SearchableFileBuffer object.
 	

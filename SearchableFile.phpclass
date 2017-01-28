@@ -1294,7 +1294,7 @@ class  SearchableFile			implements 	\ArrayAccess, \Countable, \Iterator
         Implements a buffer in the buffer cache.
 
   ==============================================================================================================*/
- class  SearchableFileBuffer	extends object
+ class  SearchableFileBuffer	// extends object
    {
 	// Record data
 	public 		$Data ;
